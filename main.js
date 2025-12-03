@@ -96,9 +96,16 @@ async function fetchMe({ proxy, token }) {
     headers: {
       'cookie': 'j=' + token
     }
-  }).then(res => res.json()).catch(err => {
+  }).then(async res => {
+    if (!res.ok) return { success: false, error: 'HTTP ' + res.status };
+    try {
+      return { success: true, data: await res.json() };
+    } catch {
+      return { success: false, error: 'Invalid JSON' };
+    }
+  }).catch(err => {
     debugLog('[fetchMe] Error occurred:', err.message);
-    return null
+    return { success: false, error: err.message };
   });
 }
 
@@ -407,10 +414,11 @@ async function startServer(port, host) {
         return res.status(409).json({ error: 'account already exists' });
       }
 
-      const response = await fetchMe({ token });
-      if (!response || !response.charges) {
-        return res.status(400).json({ error: 'invalid token' });
+      const result = await fetchMe({ token });
+      if (!result.success || !result.data || !result.data.charges) {
+        return res.status(400).json({ error: 'invalid token or connection error: ' + (result.error || '') });
       }
+      const response = result.data;
       const account = {
         fp: crypto.createHash('md5').update(token).digest('hex'),
         name: name || response.name,
@@ -422,6 +430,7 @@ async function startServer(port, host) {
         extraColorsBitmap: Math.floor(response.extraColorsBitmap),
         active: !response.banned,
         proxy,
+        proxyStatus: 'ok'
       }
 
       accounts.push(account);
@@ -450,15 +459,28 @@ async function startServer(port, host) {
       const account = accounts[idx]
 
       for (let index = 0; index < 2; index++) {
-        const me = await fetchMe(account);
+        const result = await fetchMe(account);
 
-        account.active = Boolean(me && me.charges && !me.banned)
+        if (!result.success) {
+          account.active = false;
+          account.lastError = result.error;
+          if (result.error && (result.error.toLowerCase().includes('proxy') || result.error.includes('timed out') || result.error.includes('ECONN') || result.error.includes('ENOTFOUND'))) {
+            account.proxyStatus = 'failed';
+          }
+        } else {
+          const me = result.data;
+          account.active = Boolean(me && me.charges && !me.banned);
+          account.lastError = null;
+          account.proxyStatus = 'ok';
+          if (account.active) {
+            account.pixelCount = Math.floor(me.charges.count);
+            account.pixelMax = me.charges.max;
+            account.droplets = me.droplets;
+            account.extraColorsBitmap = Math.floor(me.extraColorsBitmap);
+          }
+        }
+
         if (account.active) {
-          account.pixelCount = Math.floor(me.charges.count)
-          account.pixelMax = me.charges.max
-          account.droplets = me.droplets
-          account.extraColorsBitmap = Math.floor(me.extraColorsBitmap)
-
           if (account.autobuy === "max" || account.autobuy === "rec") {
             const productId = account.autobuy === 'max' ? 70 : 80;
             const droplets = Number(account.droplets || 0);

@@ -873,7 +873,7 @@ let pendingZoomToItem = null;
 let readyLockedItem = null;
 let accountsData = [];
 let readySelectedAccountIds = [];
-const MAX_READY_ACCOUNTS = 12;
+const MAX_READY_ACCOUNTS = 100;
 let autoSelecting = false;
 let ACTIVE_PALETTE = null;
 let paletteMode = 'premium'; // 'premium' | 'free'
@@ -4610,16 +4610,29 @@ function renderAccountsTable(rows) {
     } catch { }
 }
 async function loadAccounts() {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
     try {
-        const res = await fetch('/api/accounts');
+        const res = await fetch('/api/accounts', { signal: controller.signal });
+        clearTimeout(timeoutId);
         const data = await res.json();
         if (Array.isArray(data)) renderAccountsTable(data);
-    } catch { }
+    } catch (e) {
+        clearTimeout(timeoutId);
+        const isTimeout = e.name === 'AbortError' || (e.message && e.message.includes('aborted'));
+        if (isTimeout) console.warn('Timeout in loadAccounts');
+    }
 }
 async function refreshAccountById(accountId) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
     try {
-        await fetch('/api/accounts/' + encodeURIComponent(String(accountId)) + '/refresh', { method: 'POST' });
-    } catch { }
+        await fetch('/api/accounts/' + encodeURIComponent(String(accountId)) + '/refresh', { method: 'POST', signal: controller.signal });
+    } catch (e) {
+        const isTimeout = e.name === 'AbortError' || (e.message && e.message.includes('aborted'));
+        if (isTimeout) console.warn('Timeout in refreshAccountById for account ' + accountId);
+    }
+    clearTimeout(timeoutId);
     try { await loadAccounts(); } catch { }
 }
 const BULK_REFRESH_PERIOD_MS = 90 * 1000;
@@ -5847,6 +5860,7 @@ async function postBatch(area, no, colors, coords, jToken) {
             clearTimeout(timeoutId);
             const isTimeout = e.name === 'AbortError' || (e.message && e.message.includes('aborted'));
             if (isTimeout) {
+                console.warn('Timeout in postBatch (attempt ' + (i + 1) + ')');
                 if (typeof accountsData !== 'undefined' && Array.isArray(accountsData)) {
                     const acc = accountsData.find(a => a && a.token === jToken);
                     if (acc && typeof refreshAccountById === 'function') {
@@ -5957,6 +5971,7 @@ if (startBtn) {
                 let usedIds = [];
                 let hadRequestError = false;
                 let didReload = false;
+                let accountSkipped = false;
                 for (const g of groups) {
                     const total = g.colors.length | 0;
                     const selectedAccounts = getSelectedAccountsSortedByCapacityDesc();
@@ -5964,9 +5979,23 @@ if (startBtn) {
                     for (let i = 0; i < selectedAccounts.length && offset < total; i++) {
                         const acc = selectedAccounts[i];
                         let retries = 0;
-                        while (retries < MAX_RETRIES_PIXEL_DISCREPANCY) {
+                        const RETRIES_LIMIT = typeof MAX_RETRIES_PAINT !== 'undefined' ? MAX_RETRIES_PAINT : 5;
+                        while (retries < RETRIES_LIMIT) {
                             try { await refreshAccountById(acc.id); } catch { }
-                            const cap = Math.max(0, Math.floor(Number(acc.pixelCount) || 0));
+                            const updatedAcc = Array.isArray(accountsData) ? accountsData.find(a => a && a.id === acc.id) : acc;
+                            
+                            // Check if account is still active (proxy check)
+                            if (updatedAcc && updatedAcc.active === false) {
+                                let reason = 'inactive';
+                                if (updatedAcc.proxyStatus === 'failed') reason = 'proxy failed';
+                                else if (updatedAcc.lastError) reason = updatedAcc.lastError;
+                                console.warn('Account ' + acc.name + ' inactive (' + reason + '). Skipping.');
+                                accountSkipped = true;
+                                usedIds.push(acc.id); // Skip for next pick
+                                break;
+                            }
+
+                            const cap = Math.max(0, Math.floor(Number(updatedAcc.pixelCount) || 0));
                             if (cap <= 0) {
                                 retries++;
                                 await new Promise(r => setTimeout(r, 500));
@@ -5981,28 +6010,35 @@ if (startBtn) {
                             const colorsSlice = g.colors.slice(offset, offset + take);
                             const coordsSlice = g.coords.slice(offset * 2, (offset + take) * 2);
                             startBtn.disabled = true
-                            const r = await postBatch(String(g.area), String(g.no), colorsSlice, coordsSlice, String(acc.token || ''));
+                            const r = await postBatch(String(g.area), String(g.no), colorsSlice, coordsSlice, String(updatedAcc.token || ''));
                             startBtn.disabled = false
+                            
                             if (r && r.status === 429) {
-                                hadRequestError = true;
-                                try { showToast(t('messages.cfClearanceChange'), 'error', 3500); } catch { showToast('Please change cf_clearance.', 'error', 3500); }
+                                console.warn('429 on account ' + updatedAcc.name + '. Trying next account.');
+                                accountSkipped = true;
+                                usedIds.push(updatedAcc.id);
                                 break;
                             }
                             if (!r.ok) {
-                                if (r.status >= 500) {
+                                if (r.status === 0 || r.status >= 500) {
+                                    // Timeout or Server Error
+                                    console.warn('Error/Timeout on account ' + updatedAcc.name + ' (status ' + r.status + '). Trying next account.');
                                     try { await loadAccounts(); } catch { }
-                                    continue;
+                                    accountSkipped = true;
+                                    usedIds.push(updatedAcc.id);
+                                    break;
                                 } else {
-                                    hadRequestError = true;
-                                    showToast(r.payload ? JSON.stringify(r.payload) : (r.text || r.error || t('messages.errorGeneric')), 'error', 3000);
+                                    console.warn('Client error on account ' + updatedAcc.name + ' (status ' + r.status + '). ' + r.text);
+                                    accountSkipped = true;
+                                    usedIds.push(updatedAcc.id);
                                     break;
                                 }
                             } else {
                                 addRecentPaintBatch(g, coordsSlice, colorsSlice, tileW, tileH, baseTile);
                                 offset += take;
-                                usedIds.push(acc.id);
-                                try { await refreshAccountById(acc.id); } catch { }
-                                break; // Success, move to next batch or account
+                                usedIds.push(updatedAcc.id);
+                                try { await refreshAccountById(updatedAcc.id); } catch { }
+                                break; // Success
                             }
                         }
                     }
@@ -6025,7 +6061,7 @@ if (startBtn) {
                 try { updateReadySelectionLabel(); } catch { }
                 render();
                 // Auto mode: después de pintar, selecciona la siguiente cuenta y auto selecciona píxeles
-                if (autoMode && paintedAny && !hadRequestError) {
+                if (autoMode && (paintedAny || accountSkipped) && !hadRequestError) {
                     try {
                         await loadAccounts();
                         try { renderReadyAccountList(); } catch { }
