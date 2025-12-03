@@ -46,7 +46,7 @@
 1) Clone the repository and enter the folder:
 
 ```bash
-git clone https://github.com/songloimr/WPlace-MegaBOT](https://github.com/BSG-Walter/WPlace-HyperBOT
+git clone https://github.com/BSG-Walter/WPlace-HyperBOT
 cd WPlace-HyperBOT
 ```
 
@@ -65,4 +65,5 @@ npm install
 npm start
 
 ```
+
 
