@@ -1,9 +1,9 @@
 <p align="center">
-  <strong>WPlace MegaBOT</strong>
+  <strong>WPlace HyperBOT</strong>
 </p>
 
 <p align="center">
-  Fork of WPlace-UltraBot focused on safer painting logic to minimize account ban risks.
+  Fork of WPlace-MegaBot with more automation and higher account ban risks.
 </p>
 
 <p align="center">
@@ -63,4 +63,5 @@ npm install
 
 ```bash
 npm start
+
 ```
