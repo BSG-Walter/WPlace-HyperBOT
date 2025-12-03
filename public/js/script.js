@@ -1,4 +1,6 @@
 const I18N_DEFAULT_LANG = 'en';
+const MAX_RETRIES_PAINT = 5;
+const MAX_RETRIES_PIXEL_DISCREPANCY = 5;
 let I18N_LANG = I18N_DEFAULT_LANG;
 let I18N_STRINGS = {};
 const LANGS = [
@@ -4362,7 +4364,7 @@ function updateShopAutobuyUi() {
 async function toggleAutobuy(which) {
     const account = shopCurrentAccount;
     if (!account) return;
-    const newVal = account.autobuy === which ? null : which;
+    const newVal = account.autobuy === which ? '' : which;
     try {
         const res = await fetch('/api/accounts/' + encodeURIComponent(String(account.id)), {
             method: 'PATCH',
@@ -5812,30 +5814,56 @@ function getSelectedAccountsSortedByCapacityDesc() {
     return rows;
 }
 async function postBatch(area, no, colors, coords, jToken) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), PAINT_REQUEST_TIMEOUT_MS);
-    try {
-        const res = await fetch('/api/pixel/' + encodeURIComponent(area) + '/' + encodeURIComponent(no), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ colors, coords, j: jToken }),
-            signal: controller.signal
-        });
-        clearTimeout(timeoutId);
-        const text = await res.text();
-        let payload = null;
-        try { payload = JSON.parse(text); } catch { }
+    let lastResult = null;
+    for (let i = 0; i < MAX_RETRIES_PAINT; i++) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), PAINT_REQUEST_TIMEOUT_MS);
+        try {
+            const res = await fetch('/api/pixel/' + encodeURIComponent(area) + '/' + encodeURIComponent(no), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ colors, coords, j: jToken }),
+                signal: controller.signal
+            });
+            clearTimeout(timeoutId);
+            const text = await res.text();
+            let payload = null;
+            try { payload = JSON.parse(text); } catch { }
 
-        return { ok: res.status < 500 && !!(payload && Object.prototype.hasOwnProperty.call(payload, 'painted')), payload, text, status: res.status };
-    } catch (e) {
-        clearTimeout(timeoutId);
-        const isTimeout = e.name === 'AbortError' || (e.message && e.message.includes('aborted'));
-        return {
-            ok: false,
-            error: isTimeout ? 'Request timed out' : (e && e.message ? e.message : String(e)),
-            status: isTimeout ? 504 : 0
-        };
+            const ok = res.status < 500 && !!(payload && Object.prototype.hasOwnProperty.call(payload, 'painted'));
+            lastResult = { ok, payload, text, status: res.status };
+
+            if (ok) return lastResult;
+
+            if (typeof accountsData !== 'undefined' && Array.isArray(accountsData)) {
+                const acc = accountsData.find(a => a && a.token === jToken);
+                if (acc && typeof refreshAccountById === 'function') {
+                    try { await refreshAccountById(acc.id); } catch { }
+                }
+            }
+            await new Promise(r => setTimeout(r, 500));
+            continue;
+        } catch (e) {
+            clearTimeout(timeoutId);
+            const isTimeout = e.name === 'AbortError' || (e.message && e.message.includes('aborted'));
+            if (isTimeout) {
+                if (typeof accountsData !== 'undefined' && Array.isArray(accountsData)) {
+                    const acc = accountsData.find(a => a && a.token === jToken);
+                    if (acc && typeof refreshAccountById === 'function') {
+                        try { await refreshAccountById(acc.id); } catch { }
+                    }
+                }
+                await new Promise(r => setTimeout(r, 500));
+                continue;
+            }
+            return {
+                ok: false,
+                error: (e && e.message ? e.message : String(e)),
+                status: 0
+            };
+        }
     }
+    return lastResult || { ok: false, error: 'Request failed after retries', status: 0 };
 }
 
 function updateStartEnabled() {
@@ -5935,35 +5963,48 @@ if (startBtn) {
                     let offset = 0;
                     for (let i = 0; i < selectedAccounts.length && offset < total; i++) {
                         const acc = selectedAccounts[i];
-                        const cap = Math.max(0, Math.floor(Number(acc.pixelCount) || 0));
-                        if (cap <= 0) continue;
-                        const take = Math.min(cap, total - offset);
-                        if (take <= 0) continue;
-                        const colorsSlice = g.colors.slice(offset, offset + take);
-                        const coordsSlice = g.coords.slice(offset * 2, (offset + take) * 2);
-                        startBtn.disabled = true
-                        const r = await postBatch(String(g.area), String(g.no), colorsSlice, coordsSlice, String(acc.token || ''));
-                        startBtn.disabled = false
-                        if (r && r.status === 429) {
-                            hadRequestError = true;
-                            try { showToast(t('messages.cfClearanceChange'), 'error', 3500); } catch { showToast('Please change cf_clearance.', 'error', 3500); }
-                            break;
-                        }
-                        if (!r.ok) {
-                            if (r.status >= 500) {
-                                try { await loadAccounts(); } catch { }
+                        let retries = 0;
+                        while (retries < MAX_RETRIES_PIXEL_DISCREPANCY) {
+                            try { await refreshAccountById(acc.id); } catch { }
+                            const cap = Math.max(0, Math.floor(Number(acc.pixelCount) || 0));
+                            if (cap <= 0) {
+                                retries++;
+                                await new Promise(r => setTimeout(r, 500));
                                 continue;
-                            } else {
+                            }
+                            const take = Math.min(cap, total - offset);
+                            if (take <= 0) {
+                                retries++;
+                                await new Promise(r => setTimeout(r, 500));
+                                continue;
+                            }
+                            const colorsSlice = g.colors.slice(offset, offset + take);
+                            const coordsSlice = g.coords.slice(offset * 2, (offset + take) * 2);
+                            startBtn.disabled = true
+                            const r = await postBatch(String(g.area), String(g.no), colorsSlice, coordsSlice, String(acc.token || ''));
+                            startBtn.disabled = false
+                            if (r && r.status === 429) {
                                 hadRequestError = true;
-                                showToast(r.payload ? JSON.stringify(r.payload) : (r.text || r.error || t('messages.errorGeneric')), 'error', 3000);
+                                try { showToast(t('messages.cfClearanceChange'), 'error', 3500); } catch { showToast('Please change cf_clearance.', 'error', 3500); }
                                 break;
                             }
-                        } else {
-                            addRecentPaintBatch(g, coordsSlice, colorsSlice, tileW, tileH, baseTile);
+                            if (!r.ok) {
+                                if (r.status >= 500) {
+                                    try { await loadAccounts(); } catch { }
+                                    continue;
+                                } else {
+                                    hadRequestError = true;
+                                    showToast(r.payload ? JSON.stringify(r.payload) : (r.text || r.error || t('messages.errorGeneric')), 'error', 3000);
+                                    break;
+                                }
+                            } else {
+                                addRecentPaintBatch(g, coordsSlice, colorsSlice, tileW, tileH, baseTile);
+                                offset += take;
+                                usedIds.push(acc.id);
+                                try { await refreshAccountById(acc.id); } catch { }
+                                break; // Success, move to next batch or account
+                            }
                         }
-                        offset += take;
-                        usedIds.push(acc.id);
-                        try { await refreshAccountById(acc.id); } catch { }
                     }
                     if (offset > 0) paintedAny = true;
                     if (offset < total && !hadRequestError) missingTotal += (total - offset);

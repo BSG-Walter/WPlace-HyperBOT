@@ -340,7 +340,9 @@ async function startServer(port, host) {
 
     name && (account.name = name)
     pixelRight && (account.pixelRight = pixelRight)
-    autobuy && (account.autobuy = autobuy)
+    if (autobuy !== undefined) {
+      account.autobuy = autobuy
+    }
 
     if (token) {
       if (!isValidToken(token)) {
