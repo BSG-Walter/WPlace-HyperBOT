@@ -1,9 +1,9 @@
 <p align="center">
-  <strong>WPlace MegaBOT</strong>
+  <strong>WPlace HyperBOT</strong>
 </p>
 
 <p align="center">
-  Fork of WPlace-UltraBot focused on safer painting logic to minimize account ban risks.
+  Fork of WPlace-MegaBot with more automation and higher account ban risks.
 </p>
 
 <p align="center">
@@ -46,8 +46,8 @@
 1) Clone the repository and enter the folder:
 
 ```bash
-git clone https://github.com/songloimr/WPlace-MegaBOT
-cd WPlace-MegaBOT
+git clone https://github.com/BSG-Walter/WPlace-HyperBOT
+cd WPlace-HyperBOT
 ```
 
 2) Install dependencies:
@@ -63,4 +63,7 @@ npm install
 
 ```bash
 npm start
+
 ```
+
+
