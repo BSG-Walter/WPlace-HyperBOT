@@ -2893,7 +2893,7 @@ function loadImage(area, no, preserveView = false) {
         } catch { }
     };
     image.onerror = () => {
-        alert(t('messages.imageLoadFailed'));
+        console.log(t('messages.imageLoadFailed'));
     };
     image.src = url;
 }
@@ -5985,6 +5985,11 @@ if (startBtn) {
                             const updatedAcc = Array.isArray(accountsData) ? accountsData.find(a => a && a.id === acc.id) : acc;
                             
                             // Check if account is still active (proxy check)
+                            if (!updatedAcc) {
+                                accountSkipped = true;
+                                usedIds.push(acc.id);
+                                break;
+                            }
                             if (updatedAcc && updatedAcc.active === false) {
                                 let reason = 'inactive';
                                 if (updatedAcc.proxyStatus === 'failed') reason = 'proxy failed';
@@ -6036,7 +6041,7 @@ if (startBtn) {
                             } else {
                                 addRecentPaintBatch(g, coordsSlice, colorsSlice, tileW, tileH, baseTile);
                                 offset += take;
-                                usedIds.push(updatedAcc.id);
+                                // Do not exclude successful accounts from next selection cycle
                                 try { await refreshAccountById(updatedAcc.id); } catch { }
                                 break; // Success
                             }
@@ -6115,9 +6120,12 @@ if (startBtn) {
                         }
                     } catch { }
                 }
+            } catch (e) {
+                console.error('Painting error:', e);
             } finally {
                 isPainting = false;
                 scheduleBackgroundRefresh();
+                try { updateStartEnabled(); } catch { }
             }
         })();
     });
