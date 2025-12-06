@@ -51,7 +51,7 @@ async function startBrowser() {
             if (!request.url.endsWith('.js')) {
                 return { body }
             }
-            if (body.includes('set_user_id')) {
+            if (body && body.includes('set_user_id')) {
                 console.log(request.method, request.url)
 
                 const regex = /function\s+(\w+)\s*\(.*?\){/
@@ -79,11 +79,13 @@ async function startBrowser() {
     await page.setBypassServiceWorker(true)
     await page.setRequestInterception(true)
     page.on('domcontentloaded', async () => {
-        await page.evaluate(() => {
-            setInterval(() => {
-                document.title = 'Do Not Close This Tab'
-            }, 2_000)
-        });
+        try {
+            await page.evaluate(() => {
+                setInterval(() => {
+                    document.title = 'Do Not Close This Tab'
+                }, 2_000)
+            });
+        } catch (e) {}
     })
     page.on('response', async (response) => {
         if (response.url().endsWith('pawtect/load') && response.status() === 204) {
