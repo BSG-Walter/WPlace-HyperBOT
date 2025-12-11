@@ -150,13 +150,15 @@ async function startServer(port, host) {
         }
       });
 
-      Readable.fromWeb(response.body).pipe(res).on('error', err => {
+      const stream = Readable.fromWeb(response.body);
+      stream.on('error', err => {
         if (!res.headersSent) {
           res.status(502).send('Tile fetch error: ' + err.message);
         } else {
           res.end()
         }
-      })
+      });
+      stream.pipe(res).on('error', () => {});
     } catch (e) {
       res.status(502).send('Tile fetch error');
     }
@@ -313,13 +315,15 @@ async function startServer(port, host) {
           'cookie': `j=${jToken}`
         }
       })
-      Readable.fromWeb(response.body).pipe(res).on('error', err => {
+      const stream = Readable.fromWeb(response.body);
+      stream.on('error', err => {
         if (!res.headersSent) {
           res.status(502).json({ error: 'Purchase fetch error', message: err.message });
         } else {
           res.end()
         }
-      })
+      });
+      stream.pipe(res).on('error', () => {});
     } catch (e) {
       res.status(400).json({ error: 'error', message: e.message });
     }

@@ -415,6 +415,15 @@ function scheduleBackgroundRefresh(delay = BACKGROUND_REFRESH_MS) {
         if (ok) {
             drawSelectionOverlay();
             console.log('Background refreshed');
+            try {
+                if (autoMode) {
+                    const rp = document.getElementById('ready-popup');
+                    if (rp && !rp.hidden) {
+                        const asBtn = document.getElementById('btn-auto-select');
+                        if (asBtn) asBtn.click();
+                    }
+                }
+            } catch { }
         }
         scheduleBackgroundRefresh();
     }, delay);
